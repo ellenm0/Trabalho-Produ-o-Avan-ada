@@ -269,9 +269,8 @@ if st.button(
 
         se_historico = se_historico[2:]
 
-        # Regressão Linear
-
-        rl_historico = []
+       # Regressão Linear
+rl_historico = []
 
 for i in range(3, len(dados)):
 
