@@ -7,11 +7,13 @@ from datetime import datetime, date
 from io import BytesIO
 import streamlit.components.v1 as components
 
+
 st.set_page_config(
     page_title="Transportadores Licenciados e Credenciados",
     page_icon="🚛",
     layout="wide"
 )
+
 
 MODALIDADES = [
     "COLETA E TRANSPORTE DE RESÍDUOS NÃO PERIGOSOS",
@@ -25,12 +27,16 @@ MODALIDADES = [
     "COLETA DE EFLUENTES",
 ]
 
+
 def agora_iso():
     return datetime.now().isoformat(timespec="seconds")
 
 
 def normalizar_cnpj(valor):
-    return "".join(c for c in str(valor or "") if c.isdigit())
+    return "".join(
+        c for c in str(valor or "")
+        if c.isdigit()
+    )
 
 
 def formatar_cnpj(valor):
@@ -48,17 +54,46 @@ def formatar_cnpj(valor):
     return str(valor or "")
 
 
+# ==========================================================
+# CONFIGURAÇÃO DO GITHUB
+# ==========================================================
+
 def github_config():
-    token = st.secrets.get("GITHUB_TOKEN", "")
-    repo = st.secrets.get("GITHUB_REPOSITORY", "")
-    branch = st.secrets.get("GITHUB_BRANCH", "main")
-    data_dir = st.secrets.get("GITHUB_DATA_DIR", "dados")
+
+    token = st.secrets.get(
+        "GITHUB_TOKEN",
+        ""
+    ).strip()
+
+    repo = st.secrets.get(
+        "GITHUB_REPOSITORY",
+        ""
+    ).strip()
+
+    branch = st.secrets.get(
+        "GITHUB_BRANCH",
+        "main"
+    ).strip()
+
+    data_dir = st.secrets.get(
+        "GITHUB_DATA_DIR",
+        "dados"
+    ).strip().strip("/")
 
     return token, repo, branch, data_dir
 
 
-def github_request(method, url, token, **kwargs):
-    headers = kwargs.pop("headers", {})
+def github_request(
+    method,
+    url,
+    token,
+    **kwargs
+):
+
+    headers = kwargs.pop(
+        "headers",
+        {}
+    )
 
     headers.update({
         "Authorization": f"Bearer {token}",
@@ -75,7 +110,110 @@ def github_request(method, url, token, **kwargs):
     )
 
 
-def carregar_arquivo_github(nome_arquivo, padrao):
+# ==========================================================
+# VERIFICAÇÃO DO GITHUB
+# ==========================================================
+
+def verificar_github():
+
+    token, repo, branch, data_dir = github_config()
+
+    if not token:
+        return False, (
+            "GITHUB_TOKEN não foi configurado "
+            "nos Secrets do Streamlit."
+        )
+
+    if not repo:
+        return False, (
+            "GITHUB_REPOSITORY não foi configurado "
+            "nos Secrets do Streamlit."
+        )
+
+    if "/" not in repo:
+        return False, (
+            "GITHUB_REPOSITORY está incorreto. "
+            "Use o formato usuario/repositorio."
+        )
+
+    url = f"https://api.github.com/repos/{repo}"
+
+    resposta = github_request(
+        "GET",
+        url,
+        token
+    )
+
+    if resposta.status_code == 200:
+        dados = resposta.json()
+
+        nome = dados.get(
+            "full_name",
+            repo
+        )
+
+        branch_padrao = dados.get(
+            "default_branch",
+            branch
+        )
+
+        return True, (
+            f"GitHub conectado corretamente ao "
+            f"repositório {nome}, branch {branch_padrao}."
+        )
+
+    if resposta.status_code == 401:
+        return False, (
+            "O GITHUB_TOKEN foi recusado pelo GitHub. "
+            "Verifique se o token está correto e possui "
+            "permissão para acessar o repositório."
+        )
+
+    if resposta.status_code == 403:
+        return False, (
+            "O GitHub recusou o acesso. "
+            "Verifique as permissões do GITHUB_TOKEN."
+        )
+
+    if resposta.status_code == 404:
+        return False, (
+            f"O GitHub não encontrou o repositório "
+            f"'{repo}'. "
+            f"Verifique o GITHUB_REPOSITORY nos Secrets."
+        )
+
+    return False, (
+        f"Erro ao verificar o GitHub "
+        f"({resposta.status_code}): "
+        f"{resposta.text[:500]}"
+    )
+
+
+# ==========================================================
+# CAMINHO DOS ARQUIVOS
+# ==========================================================
+
+def caminho_arquivo_github(
+    nome_arquivo
+):
+
+    token, repo, branch, data_dir = github_config()
+
+    if data_dir:
+        return f"{data_dir}/{nome_arquivo}"
+
+    return nome_arquivo
+
+
+# ==========================================================
+# CARREGAR ARQUIVO DO GITHUB
+# ==========================================================
+
+def carregar_arquivo_github(
+    nome_arquivo,
+    padrao
+):
+
     token, repo, branch, data_dir = github_config()
 
     if not token or not repo:
@@ -83,29 +221,34 @@ def carregar_arquivo_github(nome_arquivo, padrao):
             padrao,
             None,
             False,
-            "Configure GITHUB_TOKEN e GITHUB_REPOSITORY nos Secrets."
+            "Configure GITHUB_TOKEN e GITHUB_REPOSITORY "
+            "nos Secrets do Streamlit."
         )
 
-    data_dir = data_dir.strip("/")
+    caminho = caminho_arquivo_github(
+        nome_arquivo
+    )
 
-    if data_dir:
-        caminho = f"{data_dir}/{nome_arquivo}"
-    else:
-        caminho = nome_arquivo
-
-    url = f"https://api.github.com/repos/{repo}/contents/{caminho}"
+    url = (
+        f"https://api.github.com/repos/"
+        f"{repo}/contents/{caminho}"
+    )
 
     resposta = github_request(
         "GET",
         url,
         token,
-        params={"ref": branch}
+        params={
+            "ref": branch
+        }
     )
 
     if resposta.status_code == 200:
+
         dados = resposta.json()
 
         try:
+
             conteudo = base64.b64decode(
                 dados["content"]
             ).decode("utf-8")
@@ -118,24 +261,58 @@ def carregar_arquivo_github(nome_arquivo, padrao):
             )
 
         except Exception as erro:
+
             return (
                 padrao,
                 None,
                 False,
-                f"Não foi possível ler {caminho}: {erro}"
+                f"Não foi possível ler "
+                f"{caminho}: {erro}"
             )
 
     if resposta.status_code == 404:
-        return padrao, None, True, ""
+
+        # Arquivo ainda não existe.
+        # Isso é normal na primeira utilização.
+        return (
+            padrao,
+            None,
+            True,
+            ""
+        )
+
+    if resposta.status_code == 401:
+
+        return (
+            padrao,
+            None,
+            False,
+            "O GITHUB_TOKEN foi recusado pelo GitHub."
+        )
+
+    if resposta.status_code == 403:
+
+        return (
+            padrao,
+            None,
+            False,
+            "O GitHub recusou o acesso. "
+            "Verifique as permissões do token."
+        )
 
     return (
         padrao,
         None,
         False,
-        f"Erro ao acessar o GitHub ({resposta.status_code}): "
+        f"Erro ao acessar o GitHub "
+        f"({resposta.status_code}): "
         f"{resposta.text[:500]}"
     )
 
+
+# ==========================================================
+# SALVAR ARQUIVO NO GITHUB
+# ==========================================================
 
 def salvar_arquivo_github(
     nome_arquivo,
@@ -143,22 +320,29 @@ def salvar_arquivo_github(
     sha=None,
     mensagem="Atualização dos dados"
 ):
+
     token, repo, branch, data_dir = github_config()
 
-    if not token or not repo:
+    if not token:
         return (
             False,
-            "Configure GITHUB_TOKEN e GITHUB_REPOSITORY nos Secrets."
+            "GITHUB_TOKEN não está configurado."
         )
 
-    data_dir = data_dir.strip("/")
+    if not repo:
+        return (
+            False,
+            "GITHUB_REPOSITORY não está configurado."
+        )
 
-    if data_dir:
-        caminho = f"{data_dir}/{nome_arquivo}"
-    else:
-        caminho = nome_arquivo
+    caminho = caminho_arquivo_github(
+        nome_arquivo
+    )
 
-    url = f"https://api.github.com/repos/{repo}/contents/{caminho}"
+    url = (
+        f"https://api.github.com/repos/"
+        f"{repo}/contents/{caminho}"
+    )
 
     conteudo = json.dumps(
         dados,
@@ -166,14 +350,17 @@ def salvar_arquivo_github(
         indent=2
     )
 
+    conteudo_base64 = base64.b64encode(
+        conteudo.encode("utf-8")
+    ).decode("utf-8")
+
     payload = {
         "message": mensagem,
-        "content": base64.b64encode(
-            conteudo.encode("utf-8")
-        ).decode("utf-8"),
+        "content": conteudo_base64,
         "branch": branch
     }
 
+    # Se o arquivo já existe, o SHA é obrigatório.
     if sha:
         payload["sha"] = sha
 
@@ -187,27 +374,69 @@ def salvar_arquivo_github(
     if resposta.status_code in (200, 201):
         return True, ""
 
+    if resposta.status_code == 401:
+        return (
+            False,
+            "O GitHub recusou o GITHUB_TOKEN."
+        )
+
+    if resposta.status_code == 403:
+        return (
+            False,
+            "O GitHub recusou a gravação. "
+            "Verifique as permissões do GITHUB_TOKEN."
+        )
+
+    if resposta.status_code == 404:
+        return (
+            False,
+            "O GitHub não encontrou o repositório "
+            f"'{repo}' ou o token não possui acesso "
+            "a ele. Verifique GITHUB_REPOSITORY e "
+            "as permissões do token."
+        )
+
+    if resposta.status_code == 409:
+        return (
+            False,
+            "O arquivo foi alterado no GitHub por "
+            "outra ação. Atualize o aplicativo e tente "
+            "novamente."
+        )
+
     return (
         False,
-        f"Erro ao salvar no GitHub ({resposta.status_code}): "
+        f"Erro ao salvar no GitHub "
+        f"({resposta.status_code}): "
         f"{resposta.text[:500]}"
     )
 
 
+# ==========================================================
+# CARREGAMENTO DOS DADOS
+# ==========================================================
+
 def carregar_dados():
-    transportadores, sha_t, ok_t, erro_t = carregar_arquivo_github(
-        "transportadores.json",
-        []
+
+    transportadores, sha_t, ok_t, erro_t = (
+        carregar_arquivo_github(
+            "transportadores.json",
+            []
+        )
     )
 
-    historico, sha_h, ok_h, erro_h = carregar_arquivo_github(
-        "historico.json",
-        []
+    historico, sha_h, ok_h, erro_h = (
+        carregar_arquivo_github(
+            "historico.json",
+            []
+        )
     )
 
-    relatorios, sha_r, ok_r, erro_r = carregar_arquivo_github(
-        "relatorios.json",
-        []
+    relatorios, sha_r, ok_r, erro_r = (
+        carregar_arquivo_github(
+            "relatorios.json",
+            []
+        )
     )
 
     if not ok_t:
@@ -219,13 +448,22 @@ def carregar_dados():
     if not ok_r:
         st.error(erro_r)
 
-    if not isinstance(transportadores, list):
+    if not isinstance(
+        transportadores,
+        list
+    ):
         transportadores = []
 
-    if not isinstance(historico, list):
+    if not isinstance(
+        historico,
+        list
+    ):
         historico = []
 
-    if not isinstance(relatorios, list):
+    if not isinstance(
+        relatorios,
+        list
+    ):
         relatorios = []
 
     return (
@@ -238,6 +476,10 @@ def carregar_dados():
     )
 
 
+# ==========================================================
+# CRIAR ARQUIVOS INICIAIS
+# ==========================================================
+
 def garantir_dados_no_github(
     transportadores,
     historico,
@@ -246,12 +488,14 @@ def garantir_dados_no_github(
     sha_h,
     sha_r
 ):
+
     token, repo, branch, data_dir = github_config()
 
     if not token or not repo:
         return
 
     if sha_t is None:
+
         salvar_arquivo_github(
             "transportadores.json",
             transportadores,
@@ -260,6 +504,7 @@ def garantir_dados_no_github(
         )
 
     if sha_h is None:
+
         salvar_arquivo_github(
             "historico.json",
             historico,
@@ -268,6 +513,7 @@ def garantir_dados_no_github(
         )
 
     if sha_r is None:
+
         salvar_arquivo_github(
             "relatorios.json",
             relatorios,
@@ -276,7 +522,15 @@ def garantir_dados_no_github(
         )
 
 
-def snapshot_transportador(transportador, acao):
+# ==========================================================
+# HISTÓRICO
+# ==========================================================
+
+def snapshot_transportador(
+    transportador,
+    acao
+):
+
     return {
         "data": agora_iso(),
         "acao": acao,
@@ -289,17 +543,48 @@ def snapshot_transportador(transportador, acao):
     }
 
 
-def montar_endereco(transportador):
+# ==========================================================
+# ENDEREÇO
+# ==========================================================
+
+def montar_endereco(
+    transportador
+):
+
     partes = []
 
-    logradouro = transportador.get("logradouro", "").strip()
-    numero = transportador.get("numero", "").strip()
-    complemento = transportador.get("complemento", "").strip()
-    bairro = transportador.get("bairro", "").strip()
-    municipio = transportador.get("municipio", "").strip()
-    uf = transportador.get("uf", "").strip()
+    logradouro = transportador.get(
+        "logradouro",
+        ""
+    ).strip()
+
+    numero = transportador.get(
+        "numero",
+        ""
+    ).strip()
+
+    complemento = transportador.get(
+        "complemento",
+        ""
+    ).strip()
+
+    bairro = transportador.get(
+        "bairro",
+        ""
+    ).strip()
+
+    municipio = transportador.get(
+        "municipio",
+        ""
+    ).strip()
+
+    uf = transportador.get(
+        "uf",
+        ""
+    ).strip()
 
     if logradouro:
+
         endereco = logradouro
 
         if numero:
@@ -314,7 +599,10 @@ def montar_endereco(transportador):
         partes.append(bairro)
 
     cidade_uf = " - ".join(
-        x for x in [municipio, uf]
+        x for x in [
+            municipio,
+            uf
+        ]
         if x
     )
 
@@ -324,42 +612,79 @@ def montar_endereco(transportador):
     return ", ".join(partes)
 
 
-def montar_contato(transportador):
+# ==========================================================
+# CONTATO
+# ==========================================================
+
+def montar_contato(
+    transportador
+):
+
     partes = []
 
-    telefone = transportador.get("telefone", "").strip()
-    email = transportador.get("email", "").strip()
+    telefone = transportador.get(
+        "telefone",
+        ""
+    ).strip()
+
+    email = transportador.get(
+        "email",
+        ""
+    ).strip()
 
     if telefone:
-        partes.append(f"Fone: {telefone}")
+        partes.append(
+            f"Fone: {telefone}"
+        )
 
     if email:
-        partes.append(f"E-mail: {email}")
+        partes.append(
+            f"E-mail: {email}"
+        )
 
     return " ".join(partes)
 
 
-def gerar_bloco_transportador(transportador):
+# ==========================================================
+# BLOCO DO TRANSPORTADOR
+# ==========================================================
+
+def gerar_bloco_transportador(
+    transportador
+):
+
     linhas = []
 
-    nome = transportador.get("nome", "").strip()
+    nome = transportador.get(
+        "nome",
+        ""
+    ).strip()
 
     if nome:
         linhas.append(nome)
 
     cnpj = formatar_cnpj(
-        transportador.get("cnpj", "")
+        transportador.get(
+            "cnpj",
+            ""
+        )
     )
 
     if cnpj:
-        linhas.append(f"CNPJ: {cnpj}")
+        linhas.append(
+            f"CNPJ: {cnpj}"
+        )
 
-    endereco = montar_endereco(transportador)
+    endereco = montar_endereco(
+        transportador
+    )
 
     if endereco:
         linhas.append(endereco)
 
-    contato = montar_contato(transportador)
+    contato = montar_contato(
+        transportador
+    )
 
     if contato:
         linhas.append(contato)
@@ -374,39 +699,52 @@ def gerar_bloco_transportador(transportador):
         ""
     ).strip()
 
-    validade_credenciamento = transportador.get(
-        "validade_credenciamento",
-        ""
-    ).strip()
+    validade_credenciamento = (
+        transportador.get(
+            "validade_credenciamento",
+            ""
+        ).strip()
+    )
 
     if tipo and numero:
+
         linhas.append(
             f"{tipo}: {numero}"
         )
+
     elif numero:
+
         linhas.append(
             f"Credenciamento: {numero}"
         )
 
     if validade_credenciamento:
+
         linhas.append(
             f"VALIDADE: {validade_credenciamento}"
         )
 
-    descricao_licenca = transportador.get(
-        "descricao_licenca",
-        ""
-    ).strip()
+    descricao_licenca = (
+        transportador.get(
+            "descricao_licenca",
+            ""
+        ).strip()
+    )
 
-    validade_licenca = transportador.get(
-        "validade_licenca",
-        ""
-    ).strip()
+    validade_licenca = (
+        transportador.get(
+            "validade_licenca",
+            ""
+        ).strip()
+    )
 
     if descricao_licenca:
-        linhas.append(descricao_licenca)
+        linhas.append(
+            descricao_licenca
+        )
 
     if validade_licenca:
+
         linhas.append(
             f"VALIDADE: {validade_licenca}"
         )
@@ -414,10 +752,15 @@ def gerar_bloco_transportador(transportador):
     return "\n".join(linhas)
 
 
+# ==========================================================
+# GERAR RELATÓRIO
+# ==========================================================
+
 def gerar_relatorio(
     transportadores,
     data_atualizacao
 ):
+
     linhas = [
         "RELAÇÃO DE TRANSPORTADORES LICENCIADOS E CREDENCIADOS",
         f"ATUALIZADA EM {data_atualizacao}",
@@ -425,10 +768,15 @@ def gerar_relatorio(
     ]
 
     for modalidade in MODALIDADES:
+
         empresas = []
 
         for transportador in transportadores:
-            if not transportador.get("ativo", True):
+
+            if not transportador.get(
+                "ativo",
+                True
+            ):
                 continue
 
             modalidades = transportador.get(
@@ -437,7 +785,9 @@ def gerar_relatorio(
             )
 
             if modalidade in modalidades:
-                empresas.append(transportador)
+                empresas.append(
+                    transportador
+                )
 
         if not empresas:
             continue
@@ -445,6 +795,7 @@ def gerar_relatorio(
         linhas.append(
             f"MODALIDADE: {modalidade}"
         )
+
         linhas.append("")
 
         empresas.sort(
@@ -457,11 +808,16 @@ def gerar_relatorio(
         vistos = set()
 
         for transportador in empresas:
+
             chave = normalizar_cnpj(
-                transportador.get("cnpj", "")
+                transportador.get(
+                    "cnpj",
+                    ""
+                )
             )
 
             if not chave:
+
                 chave = transportador.get(
                     "id",
                     ""
@@ -486,7 +842,12 @@ def gerar_relatorio(
     return "\n".join(linhas)
 
 
+# ==========================================================
+# CRIAR WORD
+# ==========================================================
+
 def criar_docx(texto):
+
     from docx import Document
     from docx.shared import Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -509,6 +870,7 @@ def criar_docx(texto):
         if linha.startswith(
             "RELAÇÃO DE TRANSPORTADORES"
         ):
+
             paragrafo.alignment = (
                 WD_ALIGN_PARAGRAPH.CENTER
             )
@@ -520,6 +882,7 @@ def criar_docx(texto):
         elif linha.startswith(
             "ATUALIZADA EM"
         ):
+
             paragrafo.alignment = (
                 WD_ALIGN_PARAGRAPH.CENTER
             )
@@ -531,6 +894,7 @@ def criar_docx(texto):
         elif linha.startswith(
             "MODALIDADE:"
         ):
+
             paragrafo.paragraph_format.space_before = Pt(12)
 
             run = paragrafo.add_run(linha)
@@ -538,6 +902,7 @@ def criar_docx(texto):
             run.font.size = Pt(11)
 
         elif linha.strip():
+
             run = paragrafo.add_run(linha)
             run.font.size = Pt(10)
 
@@ -550,7 +915,15 @@ def criar_docx(texto):
     return arquivo
 
 
-def copiar_texto_componente(texto, identificador):
+# ==========================================================
+# COPIAR RELATÓRIO
+# ==========================================================
+
+def copiar_texto_componente(
+    texto,
+    identificador
+):
+
     texto_js = json.dumps(
         texto,
         ensure_ascii=False
@@ -564,6 +937,7 @@ def copiar_texto_componente(texto, identificador):
         font-family:Arial,sans-serif;
         margin:4px 0 8px 0;
     ">
+
         <button
             id="btn_{identificador}"
             style="
@@ -587,9 +961,11 @@ def copiar_texto_componente(texto, identificador):
                 color:#228b22;
             "
         ></span>
+
     </div>
 
     <script>
+
         const texto = {texto_js};
 
         document
@@ -597,6 +973,7 @@ def copiar_texto_componente(texto, identificador):
             .addEventListener("click", async function() {{
 
                 try {{
+
                     await navigator.clipboard.writeText(texto);
 
                     document.getElementById(
@@ -606,17 +983,25 @@ def copiar_texto_componente(texto, identificador):
                 }} catch (erro) {{
 
                     const area = document.createElement("textarea");
+
                     area.value = texto;
+
                     document.body.appendChild(area);
+
                     area.select();
+
                     document.execCommand("copy");
+
                     document.body.removeChild(area);
 
                     document.getElementById(
                         "msg_{identificador}"
                     ).innerText = "Relatório copiado!";
+
                 }}
+
             }});
+
     </script>
     """
 
@@ -626,14 +1011,22 @@ def copiar_texto_componente(texto, identificador):
     )
 
 
+# ==========================================================
+# VALIDAR TRANSPORTADOR
+# ==========================================================
+
 def validar_transportador(
     transportador,
     transportadores,
     id_atual=None
 ):
+
     erros = []
 
-    if not transportador["nome"].strip():
+    if not transportador[
+        "nome"
+    ].strip():
+
         erros.append(
             "Informe o Nome/Razão Social."
         )
@@ -643,103 +1036,172 @@ def validar_transportador(
     )
 
     if len(cnpj) != 14:
+
         erros.append(
             "Informe um CNPJ com 14 dígitos."
         )
 
-    if not transportador["logradouro"].strip():
+    if not transportador[
+        "logradouro"
+    ].strip():
+
         erros.append(
             "Informe a Rua/Logradouro."
         )
 
-    if not transportador["numero"].strip():
+    if not transportador[
+        "numero"
+    ].strip():
+
         erros.append(
             "Informe o Número."
         )
 
-    if not transportador["bairro"].strip():
+    if not transportador[
+        "bairro"
+    ].strip():
+
         erros.append(
             "Informe o Bairro."
         )
 
-    if not transportador["municipio"].strip():
+    if not transportador[
+        "municipio"
+    ].strip():
+
         erros.append(
             "Informe o Município."
         )
 
-    if not transportador["uf"].strip():
+    if not transportador[
+        "uf"
+    ].strip():
+
         erros.append(
             "Informe a UF."
         )
 
-    if not transportador["modalidades"]:
+    if not transportador[
+        "modalidades"
+    ]:
+
         erros.append(
             "Selecione pelo menos uma modalidade."
         )
 
     for existente in transportadores:
 
-        if existente.get("id") == id_atual:
+        if existente.get(
+            "id"
+        ) == id_atual:
+
             continue
 
         cnpj_existente = normalizar_cnpj(
-            existente.get("cnpj", "")
+            existente.get(
+                "cnpj",
+                ""
+            )
         )
 
         if cnpj_existente == cnpj:
+
             erros.append(
-                "Já existe um transportador cadastrado com este CNPJ."
+                "Já existe um transportador "
+                "cadastrado com este CNPJ."
             )
+
             break
 
-    transportador["modalidades"] = list(
+    transportador[
+        "modalidades"
+    ] = list(
         dict.fromkeys(
-            transportador["modalidades"]
+            transportador[
+                "modalidades"
+            ]
         )
     )
 
     return erros
 
 
-def carregar_formulario(transportador):
-    st.session_state["form_nome"] = (
-        transportador.get("nome", "")
+# ==========================================================
+# CARREGAR FORMULÁRIO
+# ==========================================================
+
+def carregar_formulario(
+    transportador
+):
+
+    st.session_state[
+        "form_nome"
+    ] = transportador.get(
+        "nome",
+        ""
     )
 
-    st.session_state["form_cnpj"] = (
-        transportador.get("cnpj", "")
+    st.session_state[
+        "form_cnpj"
+    ] = transportador.get(
+        "cnpj",
+        ""
     )
 
-    st.session_state["form_logradouro"] = (
-        transportador.get("logradouro", "")
+    st.session_state[
+        "form_logradouro"
+    ] = transportador.get(
+        "logradouro",
+        ""
     )
 
-    st.session_state["form_numero"] = (
-        transportador.get("numero", "")
+    st.session_state[
+        "form_numero"
+    ] = transportador.get(
+        "numero",
+        ""
     )
 
-    st.session_state["form_complemento"] = (
-        transportador.get("complemento", "")
+    st.session_state[
+        "form_complemento"
+    ] = transportador.get(
+        "complemento",
+        ""
     )
 
-    st.session_state["form_bairro"] = (
-        transportador.get("bairro", "")
+    st.session_state[
+        "form_bairro"
+    ] = transportador.get(
+        "bairro",
+        ""
     )
 
-    st.session_state["form_municipio"] = (
-        transportador.get("municipio", "")
+    st.session_state[
+        "form_municipio"
+    ] = transportador.get(
+        "municipio",
+        ""
     )
 
-    st.session_state["form_uf"] = (
-        transportador.get("uf", "CE")
+    st.session_state[
+        "form_uf"
+    ] = transportador.get(
+        "uf",
+        "CE"
     )
 
-    st.session_state["form_telefone"] = (
-        transportador.get("telefone", "")
+    st.session_state[
+        "form_telefone"
+    ] = transportador.get(
+        "telefone",
+        ""
     )
 
-    st.session_state["form_email"] = (
-        transportador.get("email", "")
+    st.session_state[
+        "form_email"
+    ] = transportador.get(
+        "email",
+        ""
     )
 
     st.session_state[
@@ -792,7 +1254,12 @@ def carregar_formulario(transportador):
     )
 
 
+# ==========================================================
+# LIMPAR FORMULÁRIO
+# ==========================================================
+
 def limpar_formulario():
+
     chaves = [
         "form_nome",
         "form_cnpj",
@@ -812,6 +1279,7 @@ def limpar_formulario():
     ]
 
     for chave in chaves:
+
         st.session_state.pop(
             chave,
             None
@@ -826,12 +1294,17 @@ def limpar_formulario():
     ] = None
 
 
+# ==========================================================
+# TELA DE FORMULÁRIO
+# ==========================================================
+
 def tela_formulario(
     transportadores,
     historico,
     sha_t,
     sha_h
 ):
+
     editando_id = st.session_state.get(
         "editando_id"
     )
@@ -839,19 +1312,33 @@ def tela_formulario(
     existente = None
 
     for transportador in transportadores:
-        if transportador.get("id") == editando_id:
+
+        if transportador.get(
+            "id"
+        ) == editando_id:
+
             existente = transportador
+
             break
 
     if existente:
-        st.title("Editar Transportador")
+
+        st.title(
+            "Editar Transportador"
+        )
 
         st.info(
-            f"Editando: {existente.get('nome', '')} "
-            f"— CNPJ {formatar_cnpj(existente.get('cnpj', ''))}"
+            f"Editando: "
+            f"{existente.get('nome', '')} "
+            f"— CNPJ "
+            f"{formatar_cnpj(existente.get('cnpj', ''))}"
         )
+
     else:
-        st.title("Novo Transportador")
+
+        st.title(
+            "Novo Transportador"
+        )
 
     with st.form(
         "form_transportador",
@@ -870,8 +1357,12 @@ def tela_formulario(
                 "Nome/Razão Social *",
                 value=st.session_state.get(
                     "form_nome",
-                    existente.get("nome", "")
-                    if existente else ""
+                    existente.get(
+                        "nome",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -879,8 +1370,12 @@ def tela_formulario(
                 "CNPJ *",
                 value=st.session_state.get(
                     "form_cnpj",
-                    existente.get("cnpj", "")
-                    if existente else ""
+                    existente.get(
+                        "cnpj",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -888,8 +1383,12 @@ def tela_formulario(
                 "Rua/Logradouro *",
                 value=st.session_state.get(
                     "form_logradouro",
-                    existente.get("logradouro", "")
-                    if existente else ""
+                    existente.get(
+                        "logradouro",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -897,8 +1396,12 @@ def tela_formulario(
                 "Número *",
                 value=st.session_state.get(
                     "form_numero",
-                    existente.get("numero", "")
-                    if existente else ""
+                    existente.get(
+                        "numero",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -906,8 +1409,12 @@ def tela_formulario(
                 "Complemento",
                 value=st.session_state.get(
                     "form_complemento",
-                    existente.get("complemento", "")
-                    if existente else ""
+                    existente.get(
+                        "complemento",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -917,8 +1424,12 @@ def tela_formulario(
                 "Bairro *",
                 value=st.session_state.get(
                     "form_bairro",
-                    existente.get("bairro", "")
-                    if existente else ""
+                    existente.get(
+                        "bairro",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -926,8 +1437,12 @@ def tela_formulario(
                 "Município *",
                 value=st.session_state.get(
                     "form_municipio",
-                    existente.get("municipio", "")
-                    if existente else ""
+                    existente.get(
+                        "municipio",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -935,8 +1450,12 @@ def tela_formulario(
                 "UF *",
                 value=st.session_state.get(
                     "form_uf",
-                    existente.get("uf", "CE")
-                    if existente else "CE"
+                    existente.get(
+                        "uf",
+                        "CE"
+                    )
+                    if existente
+                    else "CE"
                 )
             )
 
@@ -944,8 +1463,12 @@ def tela_formulario(
                 "Telefone",
                 value=st.session_state.get(
                     "form_telefone",
-                    existente.get("telefone", "")
-                    if existente else ""
+                    existente.get(
+                        "telefone",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -953,8 +1476,12 @@ def tela_formulario(
                 "E-mail",
                 value=st.session_state.get(
                     "form_email",
-                    existente.get("email", "")
-                    if existente else ""
+                    existente.get(
+                        "email",
+                        ""
+                    )
+                    if existente
+                    else ""
                 )
             )
 
@@ -978,7 +1505,10 @@ def tela_formulario(
         ]
 
         if tipo_atual not in opcoes_credenciamento:
-            tipo_atual = opcoes_credenciamento[0]
+
+            tipo_atual = (
+                opcoes_credenciamento[0]
+            )
 
         tipo_credenciamento = st.selectbox(
             "Tipo",
@@ -996,7 +1526,8 @@ def tela_formulario(
                     "numero_credenciamento",
                     ""
                 )
-                if existente else ""
+                if existente
+                else ""
             )
         )
 
@@ -1008,7 +1539,8 @@ def tela_formulario(
                     "validade_credenciamento",
                     ""
                 )
-                if existente else ""
+                if existente
+                else ""
             ),
             placeholder=(
                 "Ex.: 24/05/2026, "
@@ -1028,7 +1560,8 @@ def tela_formulario(
                     "descricao_licenca",
                     ""
                 )
-                if existente else ""
+                if existente
+                else ""
             ),
             height=100,
             placeholder=(
@@ -1044,7 +1577,8 @@ def tela_formulario(
                     "validade_licenca",
                     ""
                 )
-                if existente else ""
+                if existente
+                else ""
             ),
             placeholder=(
                 "Ex.: 20/12/2027, "
@@ -1065,13 +1599,17 @@ def tela_formulario(
                     "modalidades",
                     []
                 )
-                if existente else []
+                if existente
+                else []
             )
         )
 
-        coluna_salvar, coluna_cancelar = st.columns(2)
+        coluna_salvar, coluna_cancelar = (
+            st.columns(2)
+        )
 
         with coluna_salvar:
+
             salvar = st.form_submit_button(
                 "Salvar transportador",
                 type="primary",
@@ -1079,19 +1617,26 @@ def tela_formulario(
             )
 
         with coluna_cancelar:
+
             cancelar = st.form_submit_button(
                 "Cancelar",
                 use_container_width=True
             )
 
     if cancelar:
+
         limpar_formulario()
-        st.session_state["pagina"] = "Transportadores"
+
+        st.session_state[
+            "pagina"
+        ] = "Transportadores"
+
         st.rerun()
 
     if salvar:
 
         novo = {
+
             "id": (
                 existente.get("id")
                 if existente
@@ -1100,7 +1645,9 @@ def tela_formulario(
 
             "nome": nome.strip(),
 
-            "cnpj": normalizar_cnpj(cnpj),
+            "cnpj": normalizar_cnpj(
+                cnpj
+            ),
 
             "logradouro": logradouro.strip(),
 
@@ -1168,7 +1715,9 @@ def tela_formulario(
         erros = validar_transportador(
             novo,
             transportadores,
-            existente.get("id")
+            existente.get(
+                "id"
+            )
             if existente
             else None
         )
@@ -1176,6 +1725,7 @@ def tela_formulario(
         if erros:
 
             for erro in erros:
+
                 st.error(erro)
 
         else:
@@ -1190,9 +1740,15 @@ def tela_formulario(
                 )
 
                 transportadores[:] = [
+
                     novo
-                    if x.get("id") == existente.get("id")
+                    if x.get(
+                        "id"
+                    ) == existente.get(
+                        "id"
+                    )
                     else x
+
                     for x in transportadores
                 ]
 
@@ -1203,18 +1759,22 @@ def tela_formulario(
 
             else:
 
-                transportadores.append(novo)
+                transportadores.append(
+                    novo
+                )
 
                 mensagem = (
                     f"Cadastrar transportador "
                     f"{novo['nome']}"
                 )
 
-            ok1, erro1 = salvar_arquivo_github(
-                "transportadores.json",
-                transportadores,
-                sha_t,
-                mensagem
+            ok1, erro1 = (
+                salvar_arquivo_github(
+                    "transportadores.json",
+                    transportadores,
+                    sha_t,
+                    mensagem
+                )
             )
 
             if not ok1:
@@ -1223,17 +1783,22 @@ def tela_formulario(
 
             else:
 
-                ok2, erro2 = salvar_arquivo_github(
-                    "historico.json",
-                    historico,
-                    sha_h,
-                    f"Registrar histórico - {novo['nome']}"
+                ok2, erro2 = (
+                    salvar_arquivo_github(
+                        "historico.json",
+                        historico,
+                        sha_h,
+                        f"Registrar histórico - "
+                        f"{novo['nome']}"
+                    )
                 )
 
                 if not ok2:
+
                     st.warning(
                         "Cadastro salvo, mas o histórico "
-                        f"não pôde ser atualizado: {erro2}"
+                        "não pôde ser atualizado: "
+                        f"{erro2}"
                     )
 
                 st.success(
@@ -1249,12 +1814,17 @@ def tela_formulario(
                 st.rerun()
 
 
+# ==========================================================
+# TELA DE TRANSPORTADORES
+# ==========================================================
+
 def tela_transportadores(
     transportadores,
     historico,
     sha_t,
     sha_h
 ):
+
     st.title(
         "Transportadores Cadastrados"
     )
@@ -1293,6 +1863,7 @@ def tela_transportadores(
         ).lower()
 
         if not termo or termo in texto:
+
             filtrados.append(
                 transportador
             )
@@ -1305,13 +1876,16 @@ def tela_transportadores(
     )
 
     st.caption(
-        f"{len(filtrados)} transportador(es) encontrado(s)."
+        f"{len(filtrados)} "
+        f"transportador(es) encontrado(s)."
     )
 
     if not filtrados:
+
         st.info(
             "Nenhum transportador encontrado."
         )
+
         return
 
     for transportador in filtrados:
@@ -1325,16 +1899,21 @@ def tela_transportadores(
             else "INATIVO"
         )
 
-        with st.container(border=True):
+        with st.container(
+            border=True
+        ):
 
-            coluna_info, coluna_acoes = st.columns(
-                [5, 2]
+            coluna_info, coluna_acoes = (
+                st.columns(
+                    [5, 2]
+                )
             )
 
             with coluna_info:
 
                 st.markdown(
-                    f"### {transportador.get('nome', '')}"
+                    f"### "
+                    f"{transportador.get('nome', '')}"
                 )
 
                 st.write(
@@ -1364,7 +1943,10 @@ def tela_transportadores(
 
                 if st.button(
                     "Editar",
-                    key=f"editar_{transportador['id']}",
+                    key=(
+                        f"editar_"
+                        f"{transportador['id']}"
+                    ),
                     use_container_width=True
                 ):
 
@@ -1385,7 +1967,10 @@ def tela_transportadores(
 
                     if st.button(
                         "Desativar",
-                        key=f"desativar_{transportador['id']}",
+                        key=(
+                            f"desativar_"
+                            f"{transportador['id']}"
+                        ),
                         use_container_width=True
                     ):
 
@@ -1396,39 +1981,47 @@ def tela_transportadores(
                             )
                         )
 
-                        transportador["ativo"] = False
+                        transportador[
+                            "ativo"
+                        ] = False
 
                         transportador[
                             "atualizado_em"
                         ] = agora_iso()
 
-                        ok1, erro1 = salvar_arquivo_github(
-                            "transportadores.json",
-                            transportadores,
-                            sha_t,
-                            (
-                                "Desativar transportador "
-                                f"{transportador['nome']}"
+                        ok1, erro1 = (
+                            salvar_arquivo_github(
+                                "transportadores.json",
+                                transportadores,
+                                sha_t,
+                                (
+                                    "Desativar transportador "
+                                    f"{transportador['nome']}"
+                                )
                             )
                         )
 
                         if ok1:
 
-                            ok2, erro2 = salvar_arquivo_github(
-                                "historico.json",
-                                historico,
-                                sha_h,
-                                (
-                                    "Registrar desativação - "
-                                    f"{transportador['nome']}"
+                            ok2, erro2 = (
+                                salvar_arquivo_github(
+                                    "historico.json",
+                                    historico,
+                                    sha_h,
+                                    (
+                                        "Registrar desativação - "
+                                        f"{transportador['nome']}"
+                                    )
                                 )
                             )
 
                             if not ok2:
+
                                 st.warning(
                                     "Transportador desativado, "
                                     "mas o histórico não pôde "
-                                    f"ser atualizado: {erro2}"
+                                    "ser atualizado: "
+                                    f"{erro2}"
                                 )
 
                             st.success(
@@ -1439,13 +2032,18 @@ def tela_transportadores(
 
                         else:
 
-                            st.error(erro1)
+                            st.error(
+                                erro1
+                            )
 
                 else:
 
                     if st.button(
                         "Reativar",
-                        key=f"reativar_{transportador['id']}",
+                        key=(
+                            f"reativar_"
+                            f"{transportador['id']}"
+                        ),
                         use_container_width=True
                     ):
 
@@ -1456,39 +2054,47 @@ def tela_transportadores(
                             )
                         )
 
-                        transportador["ativo"] = True
+                        transportador[
+                            "ativo"
+                        ] = True
 
                         transportador[
                             "atualizado_em"
                         ] = agora_iso()
 
-                        ok1, erro1 = salvar_arquivo_github(
-                            "transportadores.json",
-                            transportadores,
-                            sha_t,
-                            (
-                                "Reativar transportador "
-                                f"{transportador['nome']}"
+                        ok1, erro1 = (
+                            salvar_arquivo_github(
+                                "transportadores.json",
+                                transportadores,
+                                sha_t,
+                                (
+                                    "Reativar transportador "
+                                    f"{transportador['nome']}"
+                                )
                             )
                         )
 
                         if ok1:
 
-                            ok2, erro2 = salvar_arquivo_github(
-                                "historico.json",
-                                historico,
-                                sha_h,
-                                (
-                                    "Registrar reativação - "
-                                    f"{transportador['nome']}"
+                            ok2, erro2 = (
+                                salvar_arquivo_github(
+                                    "historico.json",
+                                    historico,
+                                    sha_h,
+                                    (
+                                        "Registrar reativação - "
+                                        f"{transportador['nome']}"
+                                    )
                                 )
                             )
 
                             if not ok2:
+
                                 st.warning(
                                     "Transportador reativado, "
                                     "mas o histórico não pôde "
-                                    f"ser atualizado: {erro2}"
+                                    "ser atualizado: "
+                                    f"{erro2}"
                                 )
 
                             st.success(
@@ -1499,14 +2105,21 @@ def tela_transportadores(
 
                         else:
 
-                            st.error(erro1)
+                            st.error(
+                                erro1
+                            )
 
+
+# ==========================================================
+# TELA DE RELATÓRIO
+# ==========================================================
 
 def tela_relatorio(
     transportadores,
     relatorios,
     sha_r
 ):
+
     st.title(
         "Gerar Relatório"
     )
@@ -1531,12 +2144,16 @@ def tela_relatorio(
     ativos = [
         t
         for t in transportadores
-        if t.get("ativo", True)
+        if t.get(
+            "ativo",
+            True
+        )
     ]
 
     st.caption(
         f"Serão considerados "
-        f"{len(ativos)} transportador(es) ativo(s)."
+        f"{len(ativos)} "
+        f"transportador(es) ativo(s)."
     )
 
     if st.button(
@@ -1562,13 +2179,15 @@ def tela_relatorio(
             registro
         )
 
-        ok, erro = salvar_arquivo_github(
-            "relatorios.json",
-            relatorios,
-            sha_r,
-            (
-                "Salvar relatório de "
-                f"{data_formatada}"
+        ok, erro = (
+            salvar_arquivo_github(
+                "relatorios.json",
+                relatorios,
+                sha_r,
+                (
+                    "Salvar relatório de "
+                    f"{data_formatada}"
+                )
             )
         )
 
@@ -1583,12 +2202,15 @@ def tela_relatorio(
             ] = registro
 
             st.success(
-                "Relatório gerado e salvo no histórico."
+                "Relatório gerado e salvo "
+                "no histórico."
             )
 
         else:
 
-            st.error(erro)
+            st.error(
+                erro
+            )
 
     texto = st.session_state.get(
         "relatorio_atual",
@@ -1621,7 +2243,9 @@ def tela_relatorio(
 
             st.download_button(
                 "Baixar TXT",
-                data=texto.encode("utf-8"),
+                data=texto.encode(
+                    "utf-8"
+                ),
                 file_name=(
                     "relatorio_transportadores_"
                     f"{data_formatada.replace('/', '-')}.txt"
@@ -1651,9 +2275,14 @@ def tela_relatorio(
             )
 
 
+# ==========================================================
+# RELATÓRIOS ANTERIORES
+# ==========================================================
+
 def tela_relatorios_anteriores(
     relatorios
 ):
+
     st.title(
         "Relatórios Anteriores"
     )
@@ -1685,7 +2314,9 @@ def tela_relatorios_anteriores(
             f" — gerado em {gerado_em}"
         )
 
-        with st.expander(titulo):
+        with st.expander(
+            titulo
+        ):
 
             texto = relatorio.get(
                 "texto",
@@ -1713,7 +2344,9 @@ def tela_relatorios_anteriores(
 
                 st.download_button(
                     "Baixar TXT",
-                    data=texto.encode("utf-8"),
+                    data=texto.encode(
+                        "utf-8"
+                    ),
                     file_name=(
                         "relatorio_transportadores_"
                         f"{str(data_atualizacao).replace('/', '-')}.txt"
@@ -1751,22 +2384,31 @@ def tela_relatorios_anteriores(
                 )
 
 
+# ==========================================================
+# TELA INICIAL
+# ==========================================================
+
 def tela_inicio(
     transportadores,
     relatorios
 ):
+
     st.title(
         "Transportadores Licenciados e Credenciados"
     )
 
     st.caption(
-        "Cadastro, gerenciamento e geração da relação por modalidade."
+        "Cadastro, gerenciamento e geração "
+        "da relação por modalidade."
     )
 
     ativos = sum(
         1
         for t in transportadores
-        if t.get("ativo", True)
+        if t.get(
+            "ativo",
+            True
+        )
     )
 
     inativos = (
@@ -1784,10 +2426,15 @@ def tela_inicio(
             )
         )
         for t in transportadores
-        if t.get("ativo", True)
+        if t.get(
+            "ativo",
+            True
+        )
     )
 
-    coluna1, coluna2, coluna3, coluna4 = st.columns(4)
+    coluna1, coluna2, coluna3, coluna4 = (
+        st.columns(4)
+    )
 
     coluna1.metric(
         "Transportadores ativos",
@@ -1821,16 +2468,23 @@ def tela_inicio(
     st.divider()
 
     st.info(
-        "Os cadastros são mantidos por CNPJ, permitindo "
-        "associar várias modalidades à mesma empresa. "
-        "Os relatórios já gerados permanecem preservados "
-        "mesmo após futuras edições."
+        "Os cadastros são mantidos por CNPJ, "
+        "permitindo associar várias modalidades "
+        "à mesma empresa. Os relatórios já gerados "
+        "permanecem preservados mesmo após "
+        "futuras edições."
     )
 
 
+# ==========================================================
+# FUNÇÃO PRINCIPAL
+# ==========================================================
+
 def main():
 
-    token, repo, branch, data_dir = github_config()
+    token, repo, branch, data_dir = (
+        github_config()
+    )
 
     if not token or not repo:
 
@@ -1839,8 +2493,36 @@ def main():
         )
 
         st.write(
-            "Adicione nos Secrets do Streamlit: "
-            "GITHUB_TOKEN e GITHUB_REPOSITORY."
+            "Adicione nos Secrets do Streamlit:"
+        )
+
+        st.code(
+            'GITHUB_TOKEN = "seu_token"\n'
+            'GITHUB_REPOSITORY = '
+            '"ellenm0/Trabalho-Produ-o-Avan-ada"'
+        )
+
+        st.stop()
+
+    # Verifica o acesso ao repositório
+    github_ok, github_mensagem = (
+        verificar_github()
+    )
+
+    if not github_ok:
+
+        st.error(
+            "Não foi possível acessar o "
+            "repositório do GitHub."
+        )
+
+        st.warning(
+            github_mensagem
+        )
+
+        st.info(
+            "Verifique os Secrets do Streamlit "
+            "e as permissões do GITHUB_TOKEN."
         )
 
         st.stop()
@@ -1864,11 +2546,13 @@ def main():
     )
 
     if "pagina" not in st.session_state:
+
         st.session_state[
             "pagina"
         ] = "Início"
 
     if "editando_id" not in st.session_state:
+
         st.session_state[
             "editando_id"
         ] = None
@@ -1889,7 +2573,9 @@ def main():
         "Navegação",
         opcoes,
         index=opcoes.index(
-            st.session_state["pagina"]
+            st.session_state[
+                "pagina"
+            ]
         )
     )
 
